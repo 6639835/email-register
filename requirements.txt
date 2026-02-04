@@ -1,0 +1,13 @@
+# Batch Email Registration Tool - Dependencies
+#
+# Install with: pip install -r requirements.txt
+
+# HTTP requests library for API communication
+requests>=2.28.0
+
+# Note: tkinter is part of Python's standard library
+# and does not need to be installed separately.
+# On some Linux distributions, you may need to install:
+#   - Ubuntu/Debian: sudo apt-get install python3-tk
+#   - Fedora: sudo dnf install python3-tkinter
+#   - Arch: sudo pacman -S tk
