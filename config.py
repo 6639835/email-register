@@ -37,6 +37,7 @@ DEFAULT_CONFIG = {
     "timeout_sec": "10",
     "retries": "0",
     "proxy": "",
+    "api_key": "",
     "open_folder_when_done": "true",
     "first_names_file": "first_names.txt",
     "last_names_file": "last_names.txt",
@@ -130,6 +131,7 @@ class AppConfig:
     timeout_sec: int = 10
     retries: int = 0
     proxy: str = ""
+    api_key: str = ""
     open_folder_when_done: bool = True
 
     # Name files for ename mode
@@ -168,6 +170,7 @@ class AppConfig:
             timeout_sec=int(defaults.get("timeout_sec", "10")),
             retries=int(defaults.get("retries", "0")),
             proxy=defaults.get("proxy", ""),
+            api_key=defaults.get("api_key", ""),
             open_folder_when_done=defaults.get("open_folder_when_done", "true").lower()
             == "true",
             first_names_file=defaults.get("first_names_file", "first_names.txt"),
@@ -198,6 +201,7 @@ class AppConfig:
             "timeout_sec": str(self.timeout_sec),
             "retries": str(self.retries),
             "proxy": self.proxy,
+            "api_key": self.api_key,
             "open_folder_when_done": str(self.open_folder_when_done).lower(),
             "first_names_file": self.first_names_file,
             "last_names_file": self.last_names_file,

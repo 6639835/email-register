@@ -94,6 +94,7 @@ class RegistrationWorker:
             timeout=self.config.timeout_sec,
             retries=self.config.retries,
             proxies=self.config.get_proxies(),
+            api_key=self.config.api_key or None,
         )
 
         try:

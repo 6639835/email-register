@@ -1,8 +1,12 @@
 """
 API client and network utilities for email registration.
 
-Handles communication with the registration server, domain authorization,
-and URL generation.
+Handles communication with the hMailServer registration API using
+standard RESTful JSON format.
+
+API Endpoint: POST /api/v1/accounts
+Request:  {"email": "user@example.com", "password": "securepassword"}
+Response: {"success": true/false, "message": "...", "data": {...}, "error": {...}}
 """
 
 from __future__ import annotations
@@ -10,29 +14,17 @@ from __future__ import annotations
 import re
 import urllib.parse
 from dataclasses import dataclass
-from typing import Dict, Optional, Set, Tuple
+from typing import Any, Dict, Optional, Set, Tuple
 
 import requests
 
 from config import DEFAULT_SHORTLINK_SCRIPT
 
 
-# Regex patterns for error detection
-DUPLICATE_ENTRY_PATTERN = re.compile(
-    r"Duplicate entry\s+'([^']+)'[^\n]*accountaddress", re.IGNORECASE
-)
-ALREADY_EXISTS_PATTERN = re.compile(r"\balready\s+exists\b", re.IGNORECASE)
-ERROR_KEYWORDS_PATTERN = re.compile(
-    r"(user\s*or\s*password|password\s*error|failed|error)", re.IGNORECASE
-)
-
-# Phrases indicating existing account
-EXISTING_ACCOUNT_PHRASES = [
-    "already exists",
-    "user exists",
-    "account exists",
-    "email exists",
-]
+# Standard API error codes from hMailServer API
+ERROR_CODE_ACCOUNT_EXISTS = "ACCOUNT_EXISTS"
+ERROR_CODE_DOMAIN_NOT_FOUND = "DOMAIN_NOT_FOUND"
+ERROR_CODE_DOMAIN_NOT_ALLOWED = "DOMAIN_NOT_ALLOWED"
 
 
 def to_ascii_domain(domain: str) -> str:
@@ -65,9 +57,9 @@ def build_base_api(ip_cfg: str, domain: str) -> str:
     """
     ip_cfg = (ip_cfg or "").strip()
     if ip_cfg:
-        return f"http://{ip_cfg}/api"
+        return f"http://{ip_cfg}/api/v1"
     domain_ascii = to_ascii_domain(domain)
-    return f"http://mail.{domain_ascii}/api"
+    return f"http://mail.{domain_ascii}/api/v1"
 
 
 def extract_host_from_base_api(base_api: str) -> str:
@@ -123,57 +115,42 @@ def build_login_url(
     return f"http://{host}/{script}?u={email_quoted}&p={password_quoted}"
 
 
-def is_exists_error(text: str) -> bool:
+def is_duplicate_error(error_code: str) -> bool:
     """
-    Check if the response indicates the account already exists.
+    Check if the error code indicates the account already exists.
 
     Args:
-        text: Response text from the server.
+        error_code: Error code from API response.
 
     Returns:
         True if the error indicates duplicate/existing account.
     """
-    if not text:
-        return False
-
-    # Check for MySQL duplicate entry error
-    if DUPLICATE_ENTRY_PATTERN.search(text):
-        return True
-
-    # Check for English "already exists"
-    if ALREADY_EXISTS_PATTERN.search(text):
-        return True
-
-    # Check for Chinese phrases
-    for phrase in EXISTING_ACCOUNT_PHRASES:
-        if phrase in text:
-            return True
-
-    return False
+    return error_code == ERROR_CODE_ACCOUNT_EXISTS
 
 
-def normalize_response_text(text: str) -> str:
+def parse_api_response(response_data: Dict[str, Any]) -> Tuple[bool, str, bool]:
     """
-    Normalize response text for success comparison.
-
-    Removes BOM and zero-width characters.
+    Parse the standard JSON API response.
 
     Args:
-        text: Raw response text.
+        response_data: Parsed JSON response from the API.
 
     Returns:
-        Cleaned text.
+        Tuple of (success, message, is_duplicate).
     """
-    if not text:
-        return ""
+    success = response_data.get("success", False)
 
-    # Remove BOM
-    text = text.replace("\ufeff", "")
+    if success:
+        message = response_data.get("message", "Success")
+        return True, message, False
 
-    # Remove zero-width characters
-    text = re.sub(r"[\u200b\u200c\u200d]", "", text)
+    error = response_data.get("error", {})
+    error_code = error.get("code", "UNKNOWN_ERROR")
+    error_message = error.get("message", "Unknown error occurred")
 
-    return text.strip()
+    is_duplicate = is_duplicate_error(error_code)
+
+    return False, f"[{error_code}] {error_message}", is_duplicate
 
 
 @dataclass
@@ -186,9 +163,20 @@ class RegistrationResult:
 
 
 class RegistrationClient:
-    """Client for email registration API."""
+    """
+    Client for hMailServer registration API.
 
-    SUCCESS_RESPONSE = "成功1成功2"
+    Uses standard RESTful JSON API format:
+    - Endpoint: POST /api/v1/accounts
+    - Request: {"email": "...", "password": "..."}
+    - Response: {"success": true/false, "message": "...", "data": {...}, "error": {...}}
+    """
+
+    # Standard headers for JSON API
+    HEADERS = {
+        "Content-Type": "application/json",
+        "Accept": "application/json",
+    }
 
     def __init__(
         self,
@@ -196,6 +184,7 @@ class RegistrationClient:
         timeout: int = 10,
         retries: int = 0,
         proxies: Optional[Dict[str, str]] = None,
+        api_key: Optional[str] = None,
     ):
         """
         Initialize the registration client.
@@ -205,13 +194,22 @@ class RegistrationClient:
             timeout: Request timeout in seconds.
             retries: Number of retry attempts.
             proxies: Proxy configuration.
+            api_key: Optional API key for authentication.
         """
         self.session = session or requests.Session()
         self.timeout = timeout
         self.retries = retries
+        self.api_key = api_key
 
         if proxies:
             self.session.proxies.update(proxies)
+
+    def _get_headers(self) -> Dict[str, str]:
+        """Build request headers including optional API key."""
+        headers = self.HEADERS.copy()
+        if self.api_key:
+            headers["X-API-Key"] = self.api_key
+        return headers
 
     def register(
         self, base_api: str, email: str, password: str, domain: str
@@ -220,54 +218,62 @@ class RegistrationClient:
         Attempt to register an email account.
 
         Args:
-            base_api: Base API URL.
+            base_api: Base API URL (e.g., http://server/api/v1).
             email: Email address to register.
             password: Account password.
-            domain: Email domain.
+            domain: Email domain (not used in request, extracted from email).
 
         Returns:
             RegistrationResult with success status and message.
         """
-        url = f"{base_api}/xjyh_jm.php"
-        data = {
-            "address": email,
+        url = f"{base_api}/accounts"
+        payload = {
+            "email": email,
             "password": password,
-            "yu_ming": domain,
-            "my": "zc123",
         }
 
         last_error = ""
 
         for attempt in range(self.retries + 1):
             try:
-                response = self.session.post(url, data=data, timeout=self.timeout)
+                response = self.session.post(
+                    url,
+                    json=payload,
+                    headers=self._get_headers(),
+                    timeout=self.timeout,
+                )
 
-                if response.status_code != 200:
-                    last_error = f"HTTP {response.status_code}: {response.text[:200]}"
+                # Try to parse JSON response
+                try:
+                    response_data = response.json()
+                except ValueError:
+                    # Non-JSON response
+                    if response.status_code >= 400:
+                        last_error = (
+                            f"HTTP {response.status_code}: {response.text[:200]}"
+                        )
+                        continue
+                    last_error = f"Invalid JSON response: {response.text[:200]}"
                     continue
 
-                raw_text = response.text or ""
-                normalized = normalize_response_text(raw_text)
+                # Parse standard API response
+                success, message, is_duplicate = parse_api_response(response_data)
 
-                # Check for success
-                if normalized == self.SUCCESS_RESPONSE:
-                    return RegistrationResult(success=True, message=normalized)
+                if success:
+                    return RegistrationResult(success=True, message=message)
 
-                # Check for duplicate/existing account
-                if is_exists_error(raw_text):
+                if is_duplicate:
                     return RegistrationResult(
-                        success=False, message=raw_text[:1000], is_duplicate=True
+                        success=False, message=message, is_duplicate=True
                     )
 
-                # Check for other error indicators
-                if ERROR_KEYWORDS_PATTERN.search(raw_text):
-                    last_error = raw_text[:1000]
+                # Other errors - may retry for server errors
+                if response.status_code >= 500:
+                    last_error = message
                     continue
 
-                # Unrecognized response
-                last_error = (
-                    raw_text[:1000] or "HTTP 200 but unrecognized response (empty)"
-                )
+                # Client errors (4xx) should not retry
+                return RegistrationResult(success=False, message=message)
 
             except requests.RequestException as e:
                 last_error = str(e)
